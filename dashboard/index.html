@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MottuGuard • Dashboard (MQTT)</title>
+  <style>
+    body{font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji'; margin:0; background:#0b0f14; color:#e6edf3;}
+    header{display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid #1f2937; background:#0d1117;}
+    .brand{font-weight:700; letter-spacing:0.3px;}
+    .row{display:flex; gap:16px; padding:16px; flex-wrap:wrap;}
+    .card{background:#0d1117; border:1px solid #1f2937; border-radius:14px; padding:14px; box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset;}
+    .panel{flex:1 1 340px; min-width:320px;}
+    #canvasWrap{position:relative;}
+    canvas{background:#0b1220; border:1px solid #1f2937; border-radius:12px; display:block;}
+    .anchors, .tags, .events{font-size:14px; line-height:1.45}
+    .pill{display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid #334155; background:#111827}
+    .btn{padding:8px 10px; border-radius:10px; border:1px solid #334155; background:#111827; color:#e6edf3; cursor:pointer;}
+    .btn:hover{background:#0b1220}
+    .grid{display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin-top:8px;}
+    .muted{color:#94a3b8}
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+    .small{font-size:12px;}
+    .ok{color:#22c55e}
+    .warn{color:#f59e0b}
+    .bad{color:#ef4444}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">MottuGuard • Dashboard</div>
+    <div>
+      Broker: <span class="pill">ws://localhost:8080</span>
+    </div>
+  </header>
+
+  <div class="row">
+    <div class="panel card" style="max-width:760px;">
+      <h3>Mapa (UWB)</h3>
+      <div id="canvasWrap">
+        <canvas id="map" width="720" height="420"></canvas>
+      </div>
+      <div class="small muted">Espaço simulado: 6m × 3.5m. Quadrícula 0.5m.</div>
+    </div>
+
+    <div class="panel card">
+      <h3>Tags</h3>
+      <div id="tagList" class="tags"></div>
+      <h3 style="margin-top:16px;">Comandos</h3>
+      <div class="grid">
+        <button class="btn" onclick="sendCmd('tag01','find_on')">tag01 • FIND ON</button>
+        <button class="btn" onclick="sendCmd('tag02','find_on')">tag02 • FIND ON</button>
+        <button class="btn" onclick="sendCmd('tag03','find_on')">tag03 • FIND ON</button>
+        <button class="btn" onclick="sendCmd('tag01','find_off')">tag01 • FIND OFF</button>
+        <button class="btn" onclick="sendCmd('tag02','find_off')">tag02 • FIND OFF</button>
+        <button class="btn" onclick="sendCmd('tag03','find_off')">tag03 • FIND OFF</button>
+        <button class="btn" onclick="sendCmd('tag01','lock_on')">tag01 • LOCK</button>
+        <button class="btn" onclick="sendCmd('tag02','lock_on')">tag02 • LOCK</button>
+        <button class="btn" onclick="sendCmd('tag03','lock_on')">tag03 • LOCK</button>
+        <button class="btn" onclick="sendCmd('tag01','lock_off')">tag01 • UNLOCK</button>
+        <button class="btn" onclick="sendCmd('tag02','lock_off')">tag02 • UNLOCK</button>
+        <button class="btn" onclick="sendCmd('tag03','lock_off')">tag03 • UNLOCK</button>
+      </div>
+      <h3 style="margin-top:16px;">Eventos</h3>
+      <div id="eventLog" class="events small mono"></div>
+    </div>
+  </div>
+
+  <script src="./paho-mqtt-min.js"></script>
+  <script>
+  const WS_HOST = location.hostname || "localhost";
+  const WS_PORT = 8080;
+  const CLIENT_ID = "dash-" + Math.random().toString(16).slice(2);
+  const topicPos = "mottu/uwb/+/position";
+  const topicStatus = "mottu/status/+";
+  const topicEvents = "mottu/event/+";
+
+  const anchors = {
+    "A1": {x:0,   y:0},
+    "A2": {x:6.0, y:0},
+    "A3": {x:6.0, y:3.5},
+    "A4": {x:0,   y:3.5},
+  };
+
+  const tags = {}; 
+
+  const c = document.getElementById('map');
+  const ctx = c.getContext('2d');
+  const W = c.width, H = c.height;
+  const scaleX = W / 6.0; 
+  const scaleY = H / 3.5;
+
+  function drawGrid(){
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle = "#0b1220";
+    ctx.fillRect(0,0,W,H);
+    ctx.strokeStyle = "#1f2937";
+    ctx.lineWidth = 1;
+    for(let x=0; x<=6.0; x+=0.5){
+      const X = x*scaleX;
+      ctx.beginPath(); ctx.moveTo(X,0); ctx.lineTo(X,H); ctx.stroke();
+    }
+    for(let y=0; y<=3.5; y+=0.5){
+      const Y = y*scaleY;
+      ctx.beginPath(); ctx.moveTo(0,Y); ctx.lineTo(W,Y); ctx.stroke();
+    }
+    for(const [id,a] of Object.entries(anchors)){
+      const X=a.x*scaleX, Y=a.y*scaleY;
+      ctx.fillStyle = "#7dd3fc";
+      ctx.beginPath(); ctx.arc(X, Y, 6, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = "#9ca3af";
+      ctx.fillText(id, X+8, Y-8);
+    }
+    for(const [id,t] of Object.entries(tags)){
+      const X=t.x*scaleX, Y=t.y*scaleY;
+      ctx.fillStyle = t.lock ? "#f87171" : "#34d399";
+      ctx.beginPath(); ctx.arc(X, Y, 7, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = "#e5e7eb";
+      ctx.fillText(id + (t.find ? " 🔔" : ""), X+10, Y+4);
+    }
+  }
+
+  function uiRender(){
+    const el = document.getElementById('tagList');
+    el.innerHTML = Object.entries(tags).map(([id,t]) => {
+      const age = ((Date.now()-t.ts)/1000).toFixed(1)+"s";
+      const cls = (Date.now()-t.ts) > 5000 ? "bad" : "ok";
+      return `<div style="margin:6px 0;">
+        <div><strong>${id}</strong> <span class="pill mono small ${cls}">${age}</span></div>
+        <div class="small muted">x=${t.x.toFixed(2)} m • y=${t.y.toFixed(2)} m • find=${t.find} • lock=${t.lock}</div>
+      </div>`;
+    }).join("");
+  }
+
+  function logEvent(msg){
+    const el = document.getElementById('eventLog');
+    const time = new Date().toLocaleTimeString();
+    el.innerHTML = `[${time}] ${msg}<br>` + el.innerHTML;
+  }
+
+  const client = new Paho.Client(WS_HOST, WS_PORT, "/mqtt", CLIENT_ID);
+  client.onConnectionLost = (resp)=>{ logEvent("Conexão perdida: " + resp.errorMessage); };
+  client.onMessageArrived = (msg)=>{
+    if(!msg || !msg.destinationName) return;
+    try{
+      const topic = msg.destinationName;
+      if(topic.startsWith("mottu/uwb/") && topic.endsWith("/position")){
+        const payload = JSON.parse(msg.payloadString);
+        console.log(payload)
+        payload.x *= -1;
+        payload.y *= -1;
+        const id = topic.split("/")[2];
+        tags[id] = tags[id] || {x:0,y:0,find:false,lock:false,ts:0};
+        tags[id].x = payload.x; tags[id].y = payload.y; tags[id].ts = Date.now();
+      } else if(topic.startsWith("mottu/status/")){
+        const id = topic.split("/")[2];
+        const payload = JSON.parse(msg.payloadString);
+        tags[id] = tags[id] || {x:0,y:0,find:false,lock:false,ts:0};
+        if(typeof payload.find_mode === "boolean") tags[id].find = payload.find_mode;
+        if(typeof payload.locked === "boolean")    tags[id].lock = payload.locked;
+        tags[id].ts = Date.now();
+      } else if(topic.startsWith("mottu/event/")){
+        logEvent(msg.payloadString);
+      }
+      drawGrid(); uiRender();
+    }catch(e){ console.error(e); }
+  };
+  client.connect({
+    onSuccess: ()=>{
+      logEvent("Conectado ao broker.");
+      client.subscribe(topicPos);
+      client.subscribe(topicStatus);
+      client.subscribe(topicEvents);
+    },
+    useSSL: false,
+    timeout: 4,
+    reconnect: true,
+  });
+
+  function sendCmd(id, cmd){
+    const topic = `mottu/act/${id}/cmd`;
+    const msg = new Paho.Message(JSON.stringify({cmd}));
+    msg.destinationName = topic;
+    client.send(msg);
+    logEvent(`CMD → ${id}: ${cmd}`);
+  }
+
+  drawGrid(); uiRender();
+  </script>
+</body>
+</html>
