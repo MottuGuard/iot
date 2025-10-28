@@ -4,7 +4,7 @@ import paho.mqtt.client as mqtt
 
 MQTT_HOST = os.environ.get("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
-PG_DSN    = os.environ.get("PG_DSN", "dbname=mottu user=postgres password=postgres host=localhost port=5432")
+PG_DSN    = os.environ.get("PG_DSN")
 
 GEOF = (0.2, 0.2, 5.8, 3.3) 
 last_seen = {}
@@ -40,11 +40,10 @@ def on_message(client, userdata, msg):
             x, y, ts = float(p["x"]), float(p["y"]), float(p.get("ts", time.time()))
             insert_position(tag, x, y, ts)
             last_seen[tag] = time.time()
-            # geofence
             x0,y0,x1,y1 = GEOF
             if not (x0 <= x <= x1 and y0 <= y <= y1):
                 ev = {"reason": "geofence_breach", "x": x, "y": y, "ts": ts}
-                client.publish(f"mottu/event/{tag}", json.dumps(ev), qos=0)
+                client.publish(f"mottu/event/{tag}", json.dumps(ev), qos=1)
                 insert_event(tag, "geofence", ev)
 
         elif topic.startswith("mottu/uwb/") and topic.endswith("/ranging"):
@@ -76,7 +75,7 @@ def offline_watcher(client):
         for tag, seen in list(last_seen.items()):
             if (now - seen) > 8:
                 ev = {"reason":"offline", "last_seen_sec": now-seen, "ts": now}
-                client.publish(f"mottu/event/{tag}", json.dumps(ev), qos=0)
+                client.publish(f"mottu/event/{tag}", json.dumps(ev), qos=1)
                 insert_event(tag, "offline", ev)
                 last_seen[tag] = now 
         time.sleep(2)

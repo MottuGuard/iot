@@ -26,10 +26,58 @@ state = {
 
 RANDOM = random.Random(42 + hash(TAG_ID) % 1000)
 
+class KalmanFilter2D:
+    def __init__(self, x0, y0, dt=0.1):
+        self.dt = dt
+        self.state = np.array([[x0], [y0], [0.0], [0.0]])
+
+        self.F = np.array([
+            [1, 0, dt, 0],
+            [0, 1, 0, dt],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
+        ])
+
+        self.H = np.array([
+            [1, 0, 0, 0],
+            [0, 1, 0, 0]
+        ])
+
+        self.P = np.eye(4) * 1.0
+
+        q = 0.1
+        self.Q = np.array([
+            [dt**4/4, 0, dt**3/2, 0],
+            [0, dt**4/4, 0, dt**3/2],
+            [dt**3/2, 0, dt**2, 0],
+            [0, dt**3/2, 0, dt**2]
+        ]) * q
+
+        self.R = np.array([
+            [0.05, 0],
+            [0, 0.05]
+        ])
+
+    def predict(self):
+        self.state = self.F @ self.state
+        self.P = self.F @ self.P @ self.F.T + self.Q
+
+    def update(self, measurement):
+        z = np.array([[measurement[0]], [measurement[1]]])
+        y = z - self.H @ self.state
+        S = self.H @ self.P @ self.H.T + self.R
+        K = self.P @ self.H.T @ np.linalg.inv(S)
+        self.state = self.state + K @ y
+        I = np.eye(4)
+        self.P = (I - K @ self.H) @ self.P
+
+    def get_position(self):
+        return (float(self.state[0][0]), float(self.state[1][0]))
+
 def trilaterate_least_squares(ranges, anchors):
     keys = list(ranges.keys())
     if len(keys) < 3:
-        return (state["x"], state["y"])
+        return None
 
     x1, y1 = anchors[keys[0]]
     r1 = ranges[keys[0]]
@@ -48,7 +96,7 @@ def trilaterate_least_squares(ranges, anchors):
         y = float(sol[1][0])
         return (x, y)
     except Exception:
-        return (state["x"], state["y"])
+        return None
 
 def on_message(client, userdata, msg):
     global state
@@ -80,12 +128,14 @@ def main():
     t0 = time.time()
     last_motion = time.time()
 
+    dt = 0.1
+    kf = KalmanFilter2D(state["x"], state["y"], dt)
+
     while True:
         if not state["online"]:
             time.sleep(0.5)
             continue
 
-        dt = 0.1 # 10 Hz
         t = time.time() - t0
         if SCENARIO == "missing" and t > 10:
             state["online"] = False
@@ -114,7 +164,7 @@ def main():
 
         speed = math.hypot(state["vx"], state["vy"])
         if speed > 0.7 and (time.time()-last_motion)>2.5:
-            client.publish(f"mottu/motion/{TAG_ID}", json.dumps({"speed": speed, "ts": time.time()}), qos=0)
+            client.publish(f"mottu/motion/{TAG_ID}", json.dumps({"speed": speed, "ts": time.time()}), qos=1)
             last_motion = time.time()
 
         ranges = {}
@@ -123,10 +173,16 @@ def main():
             d_noisy = d + RANDOM.gauss(0, 0.05)
             ranges[aid] = round(max(0.0, d_noisy), 3)
 
-        x_est, y_est = trilaterate_least_squares(ranges, ANCHORS)
+        kf.predict()
 
-        client.publish(f"mottu/uwb/{TAG_ID}/ranging", json.dumps({"ranges": ranges, "ts": time.time()}), qos=0)
-        client.publish(f"mottu/uwb/{TAG_ID}/position", json.dumps({"x": x_est, "y": y_est, "ts": time.time()}), qos=0)
+        trilateration_result = trilaterate_least_squares(ranges, ANCHORS)
+        if trilateration_result is not None:
+            kf.update(trilateration_result)
+
+        x_est, y_est = kf.get_position()
+
+        client.publish(f"mottu/uwb/{TAG_ID}/ranging", json.dumps({"ranges": ranges, "ts": time.time()}), qos=1)
+        client.publish(f"mottu/uwb/{TAG_ID}/position", json.dumps({"x": x_est, "y": y_est, "ts": time.time()}), qos=1)
 
 
         client.publish(f"mottu/status/{TAG_ID}", json.dumps({"find_mode": state["find_mode"], "locked": state["locked"]}), qos=0, retain=True)
