@@ -171,11 +171,20 @@ def main():
         for aid, (axp, ayp) in ANCHORS.items():
             d = math.hypot(state["x"]-axp, state["y"]-ayp)
             d_noisy = d + RANDOM.gauss(0, 0.05)
-            ranges[aid] = round(max(0.0, d_noisy), 3)
+            distance = round(max(0.0, d_noisy), 3)
+
+            rssi = -50 - 20 * math.log10(max(d, 0.1)) + RANDOM.gauss(0, 2.0)
+            rssi = round(rssi, 2)
+
+            ranges[aid] = {
+                "distance": distance,
+                "rssi": rssi
+            }
 
         kf.predict()
 
-        trilateration_result = trilaterate_least_squares(ranges, ANCHORS)
+        ranges_distances = {aid: data["distance"] for aid, data in ranges.items()}
+        trilateration_result = trilaterate_least_squares(ranges_distances, ANCHORS)
         if trilateration_result is not None:
             kf.update(trilateration_result)
 
