@@ -1,4 +1,4 @@
-# MottuGuard • Sprint 3 (IoT)
+# MottuGuard • Sprint 4 (IoT)
 
 Protótipo funcional (simulado) demonstrando **integração IoT via MQTT**, **dashboard em tempo real**, **persistência (Postgres)** e **testes de casos de uso**.
 
